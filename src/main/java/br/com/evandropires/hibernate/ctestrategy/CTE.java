@@ -8,7 +8,7 @@ public class CTE {
 
 	private String tableName;
 	private List<String> columns = new LinkedList<String>();
-	private Integer numberOfParameters = 0;
+	private List<Object[]> selectResult = new LinkedList<Object[]>();
 
 	public CTE(String tableName) {
 		this.tableName = tableName;
@@ -36,14 +36,6 @@ public class CTE {
 		this.tableName = tableName;
 	}
 
-	public Integer getNumberOfParameters() {
-		return numberOfParameters;
-	}
-
-	public void setNumberOfParameters(Integer numberOfParameters) {
-		this.numberOfParameters = numberOfParameters;
-	}
-
 	public String toStatementString() {
 		StringBuilder buf = new StringBuilder((columns.size() * 15)
 				+ tableName.length() + 10);
@@ -56,16 +48,31 @@ public class CTE {
 				buf.append(", ");
 			}
 		}
-		String parameters = "";
-		for (int i = 0; i < this.numberOfParameters; i++) {
-			if (!parameters.isEmpty()) {
-				parameters += ", ";
+		StringBuilder parameters = new StringBuilder();
+		for (Object[] result : this.selectResult) {
+			if (parameters.length() > 0) {
+				parameters.append(", ");
 			}
-			parameters += "?";
+			parameters.append("(");
+			for (int i = 0; i < result.length; i++) {
+				if (!parameters.toString().endsWith("(")) {
+					parameters.append(", ");
+				}
+				parameters.append("?");
+			}
+			parameters.append(")");
 		}
-		buf.append(" ) as ( select unnest(array[").append(parameters)
-				.append("]) )");
+
+		buf.append(" ) as ( values ").append(parameters).append(" )");
 		return buf.toString();
+	}
+
+	public List<Object[]> getSelectResult() {
+		return selectResult;
+	}
+
+	public void setSelectResult(List<Object[]> selectResult) {
+		this.selectResult = selectResult;
 	}
 
 }

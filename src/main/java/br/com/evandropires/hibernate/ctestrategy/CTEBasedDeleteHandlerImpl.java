@@ -1,6 +1,7 @@
 package br.com.evandropires.hibernate.ctestrategy;
 
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,9 +30,11 @@ public class CTEBasedDeleteHandlerImpl extends AbstractCTEBasedBulkIdHandler
 
 	private final Queryable targetedPersister;
 
-	private final String idCteSelect;
+	private final String idSelect;
+	private String idCteSelect;
 	private final List<ParameterSpecification> idSelectParameterSpecifications;
 	private final List<String> deletes;
+	private List<Object[]> selectResult;
 
 	public CTEBasedDeleteHandlerImpl(SessionFactoryImplementor factory,
 			HqlSqlWalker walker) {
@@ -53,11 +56,10 @@ public class CTEBasedDeleteHandlerImpl extends AbstractCTEBasedBulkIdHandler
 		this.idSelectParameterSpecifications = processedWhereClause
 				.getIdSelectParameterSpecifications();
 
-		this.idCteSelect = generateIdCteSelect(targetedPersister,
-				determineIdTableName(targetedPersister), processedWhereClause);
+		final String bulkTargetAlias = fromElement.getTableAlias();
 
-		log.tracev("Generated ID-CTE-SELECT SQL (multi-table delete) : {0}",
-				idCteSelect);
+		this.idSelect = generateIdSelect(targetedPersister, bulkTargetAlias,
+				processedWhereClause);
 
 		final String idSubselect = generateIdSubselect(targetedPersister);
 		deletes = new ArrayList<String>();
@@ -117,6 +119,55 @@ public class CTEBasedDeleteHandlerImpl extends AbstractCTEBasedBulkIdHandler
 		return deletes.toArray(new String[deletes.size()]);
 	}
 
+	private void prepareCteStatement(SessionImplementor session,
+			QueryParameters queryParameters) {
+		this.selectResult = new ArrayList<Object[]>();
+
+		PreparedStatement ps = null;
+
+		try {
+			try {
+				ps = session.getTransactionCoordinator().getJdbcCoordinator()
+						.getStatementPreparer()
+						.prepareStatement(idSelect, false);
+				int sum = 1;
+				sum += handlePrependedParametersOnIdSelection(ps, session, sum);
+				for (ParameterSpecification parameterSpecification : idSelectParameterSpecifications) {
+					sum += parameterSpecification.bind(ps, queryParameters,
+							session, sum);
+				}
+				ResultSet rs = session.getTransactionCoordinator()
+						.getJdbcCoordinator().getResultSetReturn().extract(ps);
+				while (rs.next()) {
+					Object[] result = new Object[targetedPersister
+							.getIdentifierColumnNames().length];
+					for (String columnName : targetedPersister
+							.getIdentifierColumnNames()) {
+						Object column = rs.getObject(columnName);
+						result[rs.findColumn(columnName) - 1] = column;
+					}
+					selectResult.add(result);
+				}
+
+				this.idCteSelect = generateIdCteSelect(targetedPersister,
+						determineIdTableName(targetedPersister), selectResult);
+
+				log.tracev(
+						"Generated ID-CTE-SELECT SQL (multi-table delete) : {0}",
+						idCteSelect);
+
+			} finally {
+				if (ps != null) {
+					session.getTransactionCoordinator().getJdbcCoordinator()
+							.release(ps);
+				}
+			}
+		} catch (SQLException e) {
+			throw convert(e, "could not insert/select ids for bulk update",
+					idSelect);
+		}
+	}
+
 	@Override
 	public int execute(SessionImplementor session,
 			QueryParameters queryParameters) {
@@ -124,6 +175,8 @@ public class CTEBasedDeleteHandlerImpl extends AbstractCTEBasedBulkIdHandler
 		try {
 			PreparedStatement ps = null;
 			int resultCount = 0;
+
+			prepareCteStatement(session, queryParameters);
 
 			// Start performing the deletes
 			for (String delete : deletes) {
@@ -137,9 +190,10 @@ public class CTEBasedDeleteHandlerImpl extends AbstractCTEBasedBulkIdHandler
 						int pos = 1;
 						pos += handlePrependedParametersOnIdSelection(ps,
 								session, pos);
-						for (ParameterSpecification parameterSpecification : idSelectParameterSpecifications) {
-							pos += parameterSpecification.bind(ps,
-									queryParameters, session, pos);
+						for (Object[] result : selectResult) {
+							for (Object column : result) {
+								ps.setObject(pos++, column);
+							}
 						}
 						handleAddedParametersOnDelete(ps, session);
 

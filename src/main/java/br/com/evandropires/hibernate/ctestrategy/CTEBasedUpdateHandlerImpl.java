@@ -1,6 +1,7 @@
 package br.com.evandropires.hibernate.ctestrategy;
 
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,8 +28,10 @@ public class CTEBasedUpdateHandlerImpl extends AbstractCTEBasedBulkIdHandler
 
 	private final Queryable targetedPersister;
 
-	private final String idCteSelect;
+	private final String idSelect;
+	private String idCteSelect;
 	private final List<ParameterSpecification> idSelectParameterSpecifications;
+	private List<Object[]> selectResult;
 
 	private final String[] updates;
 	private final ParameterSpecification[][] assignmentParameterSpecifications;
@@ -53,11 +56,10 @@ public class CTEBasedUpdateHandlerImpl extends AbstractCTEBasedBulkIdHandler
 		this.idSelectParameterSpecifications = processedWhereClause
 				.getIdSelectParameterSpecifications();
 
-		this.idCteSelect = generateIdCteSelect(targetedPersister,
-				determineIdTableName(targetedPersister), processedWhereClause);
+		final String bulkTargetAlias = fromElement.getTableAlias();
 
-		log.tracev("Generated ID-CTE-SELECT SQL (multi-table update) : {0}",
-				idCteSelect);
+		this.idSelect = generateIdSelect(targetedPersister,
+				bulkTargetAlias, processedWhereClause);
 
 		String[] tableNames = targetedPersister
 				.getConstraintOrderedTableNameClosure();
@@ -115,6 +117,55 @@ public class CTEBasedUpdateHandlerImpl extends AbstractCTEBasedBulkIdHandler
 		return updates;
 	}
 
+	private void prepareCteStatement(SessionImplementor session,
+			QueryParameters queryParameters) {
+		this.selectResult = new ArrayList<Object[]>();
+
+		PreparedStatement ps = null;
+
+		try {
+			try {
+				ps = session.getTransactionCoordinator().getJdbcCoordinator()
+						.getStatementPreparer()
+						.prepareStatement(idSelect, false);
+				int sum = 1;
+				sum += handlePrependedParametersOnIdSelection(ps, session, sum);
+				for (ParameterSpecification parameterSpecification : idSelectParameterSpecifications) {
+					sum += parameterSpecification.bind(ps, queryParameters,
+							session, sum);
+				}
+				ResultSet rs = session.getTransactionCoordinator()
+						.getJdbcCoordinator().getResultSetReturn().extract(ps);
+				while (rs.next()) {
+					Object[] result = new Object[targetedPersister
+							.getIdentifierColumnNames().length];
+					for (String columnName : targetedPersister
+							.getIdentifierColumnNames()) {
+						Object column = rs.getObject(columnName);
+						result[rs.findColumn(columnName) - 1] = column;
+					}
+					selectResult.add(result);
+				}
+
+				this.idCteSelect = generateIdCteSelect(targetedPersister,
+						determineIdTableName(targetedPersister), selectResult);
+
+				log.tracev(
+						"Generated ID-CTE-SELECT SQL (multi-table update) : {0}",
+						idCteSelect);
+
+			} finally {
+				if (ps != null) {
+					session.getTransactionCoordinator().getJdbcCoordinator()
+							.release(ps);
+				}
+			}
+		} catch (SQLException e) {
+			throw convert(e, "could not insert/select ids for bulk update",
+					idSelect);
+		}
+	}
+
 	@Override
 	public int execute(SessionImplementor session,
 			QueryParameters queryParameters) {
@@ -123,6 +174,9 @@ public class CTEBasedUpdateHandlerImpl extends AbstractCTEBasedBulkIdHandler
 			// First, save off the pertinent ids, as the return value
 			PreparedStatement ps = null;
 			int resultCount = 0;
+
+			prepareCteStatement(session, queryParameters);
+
 			// Start performing the updates
 			for (int i = 0; i < updates.length; i++) {
 				if (updates[i] == null) {
@@ -139,9 +193,10 @@ public class CTEBasedUpdateHandlerImpl extends AbstractCTEBasedBulkIdHandler
 						int position = 1; // jdbc params are 1-based
 						position += handlePrependedParametersOnIdSelection(ps,
 								session, position);
-						for (ParameterSpecification parameterSpecification : idSelectParameterSpecifications) {
-							position += parameterSpecification.bind(ps,
-									queryParameters, session, position);
+						for (Object[] result : selectResult) {
+							for (Object column : result) {
+								ps.setObject(position++, column);
+							}
 						}
 						if (assignmentParameterSpecifications[i] != null) {
 							for (int x = 0; x < assignmentParameterSpecifications[i].length; x++) {

@@ -14,6 +14,7 @@ import org.hibernate.internal.util.StringHelper;
 import org.hibernate.mapping.Table;
 import org.hibernate.param.ParameterSpecification;
 import org.hibernate.persister.entity.Queryable;
+import org.hibernate.sql.Select;
 import org.hibernate.sql.SelectValues;
 
 import antlr.RecognitionException;
@@ -96,12 +97,45 @@ public class AbstractCTEBasedBulkIdHandler {
 	}
 
 	protected String generateIdCteSelect(Queryable persister,
-			String idTableName, ProcessedWhereClause whereClause) {
+			String idTableName, List<Object[]> selectResult) {
 		CTE cte = new CTE(idTableName);
 		cte.addColumns(persister.getIdentifierColumnNames());
-		cte.setNumberOfParameters(whereClause
-				.getIdSelectParameterSpecifications().size());
+		cte.setSelectResult(selectResult);
 		return cte.toStatementString();
+	}
+
+	protected String generateIdSelect(Queryable persister, String tableAlias,
+			ProcessedWhereClause whereClause) {
+		Select select = new Select(sessionFactory.getDialect());
+		SelectValues selectClause = new SelectValues(
+				sessionFactory.getDialect()).addColumns(tableAlias,
+				persister.getIdentifierColumnNames(),
+				persister.getIdentifierColumnNames());
+		addAnyExtraIdSelectValues(selectClause);
+		select.setSelectClause(selectClause.render());
+		String rootTableName = persister.getTableName();
+		String fromJoinFragment = persister.fromJoinFragment(tableAlias, true,
+				false);
+		String whereJoinFragment = persister.whereJoinFragment(tableAlias,
+				true, false);
+		select.setFromClause(rootTableName + ' ' + tableAlias
+				+ fromJoinFragment);
+		if (whereJoinFragment == null) {
+			whereJoinFragment = "";
+		} else {
+			whereJoinFragment = whereJoinFragment.trim();
+			if (whereJoinFragment.startsWith("and")) {
+				whereJoinFragment = whereJoinFragment.substring(4);
+			}
+		}
+		if (whereClause.getUserWhereClauseFragment().length() > 0) {
+			if (whereJoinFragment.length() > 0) {
+				whereJoinFragment += " and ";
+			}
+		}
+		select.setWhereClause(whereJoinFragment
+				+ whereClause.getUserWhereClauseFragment());
+		return select.toStatementString();
 	}
 
 	protected void addAnyExtraIdSelectValues(SelectValues selectClause) {
