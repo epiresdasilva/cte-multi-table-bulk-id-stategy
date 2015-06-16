@@ -31,10 +31,8 @@ public class CTEBasedDeleteHandlerImpl extends AbstractCTEBasedBulkIdHandler
 	private final Queryable targetedPersister;
 
 	private final String idSelect;
-	private String idCteSelect;
 	private final List<ParameterSpecification> idSelectParameterSpecifications;
 	private final List<String> deletes;
-	private List<Object[]> selectResult;
 
 	public CTEBasedDeleteHandlerImpl(SessionFactoryImplementor factory,
 			HqlSqlWalker walker) {
@@ -119,9 +117,9 @@ public class CTEBasedDeleteHandlerImpl extends AbstractCTEBasedBulkIdHandler
 		return deletes.toArray(new String[deletes.size()]);
 	}
 
-	private void prepareCteStatement(SessionImplementor session,
+	private CTEValues prepareCteStatement(SessionImplementor session,
 			QueryParameters queryParameters) {
-		this.selectResult = new ArrayList<Object[]>();
+		CTEValues values = new CTEValues();
 
 		PreparedStatement ps = null;
 
@@ -146,16 +144,23 @@ public class CTEBasedDeleteHandlerImpl extends AbstractCTEBasedBulkIdHandler
 						Object column = rs.getObject(columnName);
 						result[rs.findColumn(columnName) - 1] = column;
 					}
-					selectResult.add(result);
+					values.getSelectResult().add(result);
 				}
 
-				this.idCteSelect = generateIdCteSelect(targetedPersister,
-						determineIdTableName(targetedPersister), selectResult);
+				if (values.getSelectResult().isEmpty()) {
+					return values;
+				}
+
+				String idCteSelect = generateIdCteSelect(targetedPersister,
+						determineIdTableName(targetedPersister),
+						values.getSelectResult());
+				values.setIdCteSelect(idCteSelect);
 
 				log.tracev(
 						"Generated ID-CTE-SELECT SQL (multi-table delete) : {0}",
 						idCteSelect);
 
+				return values;
 			} finally {
 				if (ps != null) {
 					session.getTransactionCoordinator().getJdbcCoordinator()
@@ -163,7 +168,7 @@ public class CTEBasedDeleteHandlerImpl extends AbstractCTEBasedBulkIdHandler
 				}
 			}
 		} catch (SQLException e) {
-			throw convert(e, "could not insert/select ids for bulk update",
+			throw convert(e, "could not insert/select ids for bulk delete",
 					idSelect);
 		}
 	}
@@ -176,11 +181,15 @@ public class CTEBasedDeleteHandlerImpl extends AbstractCTEBasedBulkIdHandler
 			PreparedStatement ps = null;
 			int resultCount = 0;
 
-			prepareCteStatement(session, queryParameters);
+			CTEValues values = prepareCteStatement(session, queryParameters);
 
 			// Start performing the deletes
 			for (String delete : deletes) {
-				delete = idCteSelect + delete;
+				if (values == null || values.getIdCteSelect() == null) {
+					continue;
+				}
+
+				delete = values.getIdCteSelect() + delete;
 
 				try {
 					try {
@@ -190,7 +199,7 @@ public class CTEBasedDeleteHandlerImpl extends AbstractCTEBasedBulkIdHandler
 						int pos = 1;
 						pos += handlePrependedParametersOnIdSelection(ps,
 								session, pos);
-						for (Object[] result : selectResult) {
+						for (Object[] result : values.getSelectResult()) {
 							for (Object column : result) {
 								ps.setObject(pos++, column);
 							}

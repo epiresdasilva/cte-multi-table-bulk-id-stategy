@@ -29,9 +29,7 @@ public class CTEBasedUpdateHandlerImpl extends AbstractCTEBasedBulkIdHandler
 	private final Queryable targetedPersister;
 
 	private final String idSelect;
-	private String idCteSelect;
 	private final List<ParameterSpecification> idSelectParameterSpecifications;
-	private List<Object[]> selectResult;
 
 	private final String[] updates;
 	private final ParameterSpecification[][] assignmentParameterSpecifications;
@@ -117,9 +115,9 @@ public class CTEBasedUpdateHandlerImpl extends AbstractCTEBasedBulkIdHandler
 		return updates;
 	}
 
-	private void prepareCteStatement(SessionImplementor session,
+	private CTEValues prepareCteStatement(SessionImplementor session,
 			QueryParameters queryParameters) {
-		this.selectResult = new ArrayList<Object[]>();
+		CTEValues values = new CTEValues();
 
 		PreparedStatement ps = null;
 
@@ -144,16 +142,23 @@ public class CTEBasedUpdateHandlerImpl extends AbstractCTEBasedBulkIdHandler
 						Object column = rs.getObject(columnName);
 						result[rs.findColumn(columnName) - 1] = column;
 					}
-					selectResult.add(result);
+					values.getSelectResult().add(result);
 				}
 
-				this.idCteSelect = generateIdCteSelect(targetedPersister,
-						determineIdTableName(targetedPersister), selectResult);
+				if (values.getSelectResult().isEmpty()) {
+					return values;
+				}
+
+				String idCteSelect = generateIdCteSelect(targetedPersister,
+						determineIdTableName(targetedPersister),
+						values.getSelectResult());
+				values.setIdCteSelect(idCteSelect);
 
 				log.tracev(
 						"Generated ID-CTE-SELECT SQL (multi-table update) : {0}",
 						idCteSelect);
 
+				return values;
 			} finally {
 				if (ps != null) {
 					session.getTransactionCoordinator().getJdbcCoordinator()
@@ -175,17 +180,18 @@ public class CTEBasedUpdateHandlerImpl extends AbstractCTEBasedBulkIdHandler
 			PreparedStatement ps = null;
 			int resultCount = 0;
 
-			prepareCteStatement(session, queryParameters);
+			CTEValues values = prepareCteStatement(session, queryParameters);
 
 			// Start performing the updates
 			for (int i = 0; i < updates.length; i++) {
-				if (updates[i] == null) {
+				if (updates[i] == null || values == null
+						|| values.getIdCteSelect() == null) {
 					continue;
 				}
 				try {
 					try {
 						String update = updates[i];
-						update = idCteSelect + update;
+						update = values.getIdCteSelect() + update;
 
 						ps = session.getTransactionCoordinator()
 								.getJdbcCoordinator().getStatementPreparer()
@@ -193,7 +199,7 @@ public class CTEBasedUpdateHandlerImpl extends AbstractCTEBasedBulkIdHandler
 						int position = 1; // jdbc params are 1-based
 						position += handlePrependedParametersOnIdSelection(ps,
 								session, position);
-						for (Object[] result : selectResult) {
+						for (Object[] result : values.getSelectResult()) {
 							for (Object column : result) {
 								ps.setObject(position++, column);
 							}
