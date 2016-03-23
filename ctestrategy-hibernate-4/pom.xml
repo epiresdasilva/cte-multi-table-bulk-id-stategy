@@ -1,0 +1,37 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                      http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<parent>
+		<groupId>br.com.evandropires</groupId>
+		<artifactId>ctestrategy</artifactId>
+		<version>1.1-SNAPSHOT</version>
+	</parent>
+
+    <modelVersion>4.0.0</modelVersion>
+
+	<artifactId>ctestrategy-hibernate-4</artifactId>
+	<packaging>jar</packaging>
+
+    <dependencies>
+
+        <dependency>
+            <groupId>org.hibernate</groupId>
+            <artifactId>hibernate-core</artifactId>
+            <version>${hibernate-version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.hibernate</groupId>
+            <artifactId>hibernate-testing</artifactId>
+            <version>${hibernate-version}</version>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+	<properties>
+		<hibernate-version>4.3.8.Final</hibernate-version>
+	</properties>
+
+</project>
